@@ -1,0 +1,163 @@
+---
+title: "Census ARM"
+output: html_notebook
+---
+
+
+```{r setup}
+census_data <- read.csv("ACS_Full_Features.csv")
+head(census_data)
+```
+It seems the default column names aren't in the right format, let's fix that.
+
+```{r}
+
+colnames(census_data) <- gsub("\\.", " ", colnames(census_data))
+print(colnames(census_data))
+```
+
+Now that that's done, time to drop the unnecessary columns and check if any
+others need to be binned.
+
+Age and Marriage aren't binned, 
+
+```{r}
+describe(census_data$`Median Age by Sex`)
+
+```
+The minimum is 21, the max is 68, so under 28 will be 'Young', 28-35 will be
+'Adult', 35-45 will be 'Mature Adult', 45-55 will be 'Older Adult', and 55+
+will be 'Senior'.
+
+```{r}
+breaks = c(0, 28, 35, 45, 55, Inf)
+labels = c('Young', 'Adult', 'Mature Adult', 'Older Adult', 'Senior')
+```
+
+```{r}
+census_data <- census_data %>% 
+  mutate(Age_Category = cut(`Median Age by Sex`, breaks = breaks,
+                            labels = labels, right = F))
+```
+
+```{r}
+table(census_data$Age_Category)
+
+```
+
+Not much of a 'spread' in this data, but that's alright.
+```{r}
+describe(census_data$`Now Married`)
+```
+
+Marriage seems harder to bin, given that it is based on population, with a vast
+spread. 0, 2000, 6000, 8000, 20000, and 100000 will be the bin numbers,
+with No, Few, Low, Median, Many, and High being the categories.
+
+```{r}
+breaks2 <- c(0, 2000, 6000, 8000, 20000, 100000, Inf)
+labels2 <- c('No Marriages', 'Few Marriages', 'Low Marriages', 'Median Marriages',
+             'Many Marriages', 'High Marriages')
+```
+
+```{r}
+census_data <- census_data %>% 
+  mutate(Marriage_Category = cut(`Now Married`, breaks = breaks2,
+                            labels = labels2, right = F))
+```
+
+```{r}
+table(census_data$Marriage_Category)
+```
+
+Good spread! Now, it's time to discard the numeric categories, and the NAME,
+state, and county categories. Income Category will be left off, because it's
+the label for the data.
+
+```{r}
+census_arm <- census_data %>% select(Age_Category, Marriage_Category,
+                     `POC Population Category`, `Poverty Rate Classification`,
+                     `Disabled Population Category`)
+arm_label <- census_data %>% select(`Income Category`)
+```
+
+```{r}
+head(census_arm)
+```
+```{r}
+write.csv(census_arm, "C:\\Users\\gdehl\\OneDrive\\Documents\\College -\\Grad School\\Machine Learning\\ARM_Census.csv")
+```
+
+```{r}
+head(arm_label)
+```
+
+Now, to turn this into transaction data.
+
+```{r}
+census_arm <- census_arm %>% mutate_if(is.character, as.factor)
+
+sapply(census_arm, class)
+```
+
+
+Next comes converting the factor data into transactions.
+```{r}
+census_basket <- as(census_arm, 'transactions')
+inspect(head(census_basket, n = 5))
+```
+
+Finally, the apriori algorithm can be applied to the data.
+```{r}
+census_rules <- apriori(census_basket, 
+                        parameter = list(support = 0.2, 
+                                         confidence = 0.6))
+
+# Inspect the rules
+inspect(census_rules)
+```
+The empty first two rules indicate a precedent for 'Mature Adult' and
+'Low Poverty' to appear in all 'transactions' in the dataset, or they appear so
+frequently that they count all on their own. Filtering them out to get better
+results is a good idea:
+
+```{r}
+filtered_rules <- apriori(census_basket, 
+                        parameter = list(support = 0.2, 
+                                         confidence = 0.6, minlen = 2))
+inspect(filtered_rules)
+```
+
+One interesting thing noted is the low lift rates on some of the top rules,
+a number of them have less than 1 for their lift.
+
+Visualization comes last.
+```{r}
+top_rules <- head(sort(filtered_rules, by = "lift"), 15)
+inspect(top_rules)
+p1 <- plot(top_rules, method = "graph", engine = "htmlwidget")
+p1
+```
+
+```{r}
+top_rules2 <- head(sort(filtered_rules, by = 'confidence'), 15)
+inspect(top_rules2)
+p2 <- plot(top_rules2, method = 'graph', engine = 'htmlwidget')
+p2
+```
+
+```{r}
+top_rules3 <- head(sort(filtered_rules, by = 'support'), 15)
+inspect(top_rules3)
+p3 <- plot(top_rules3, method = 'graph', engine = 'htmlwidget')
+p3
+```
+
+Finally, time to save the graphs
+```{r}
+# Use savewidget to save html files for display on website
+# Make sure to library (htmlwidgets)
+saveWidget(p1, file = "lift_plot.html")
+saveWidget(p2, file = "confidence_plot.html")
+saveWidget(p3, file = "support_plot.html")
+```
